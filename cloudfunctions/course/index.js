@@ -162,7 +162,9 @@ function formatSession(s, maps, courseById) {
     startTime: s.startTime,
     endTime: s.endTime,
     status: s.status,
+    campusId: s.campusId,
     campusName: maps.campus[s.campusId] || '',
+    teacherId: s.teacherId,
     teacherName: maps.teacher[s.teacherId] || '',
     studentName: maps.student[course.studentId] || ''
   }

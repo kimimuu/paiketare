@@ -269,30 +269,32 @@ async function submitReschedule() {
 
 // 换老师
 const ct = ref({ teacherId: '', loading: false, candidates: [], showPicker: false, error: '' })
-const changeTeacherFutureHint = computed(() => '?')
+
+function countFutureSessions() {
+  const sess = selectedSession.value
+  if (!sess) return 0
+  const today = fmtDate(new Date())
+  return sessions.value.filter(s =>
+    s.courseId === sess.courseId && s.date >= today && s.status !== 'cancelled'
+  ).length
+}
+const changeTeacherFutureHint = computed(() => `${countFutureSessions()} 节`)
 
 async function openChangeTeacher() {
   if (!selectedSession.value) return
   ct.value = { teacherId: '', loading: true, candidates: [], showPicker: false, error: '' }
   showActions.value = false
   showChangeTeacher.value = true
-  // 异步加载候选
   try {
     const s = selectedSession.value
-    const courseId = s.courseId
-    // 先拿 course duration
-    const courseList = await call('course', { action: 'schedule', startDate: s.date, endDate: s.date })
-    const sess = (courseList.list || []).find(x => x.sessionId === s.sessionId)
-    if (!sess) throw new Error('找不到课程')
-    // 用 session 的 startTime/endTime 算 duration
-    const dur = toMin(sess.endTime) - toMin(sess.startTime)
+    const dur = toMin(s.endTime) - toMin(s.startTime)
     const data = await call('course', {
       action: 'findCandidatesForReschedule',
-      campusId: sess.campusName ? (campuses.value.find(c => c.name === sess.campusName)?.campusId) : null,
-      date: sess.date,
-      startTime: sess.startTime,
+      campusId: s.campusId,
+      date: s.date,
+      startTime: s.startTime,
       duration: dur,
-      excludeTeacherId: sess.teacherId
+      excludeTeacherId: s.teacherId
     })
     ct.value.candidates = data.list || []
     ct.value.loading = false
