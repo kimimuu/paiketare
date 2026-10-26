@@ -1,4 +1,6 @@
-// availability 云函数：老师可带校区与可排时间录入（一期直接生效，预留 approvalStatus 字段）
+// availability 云函数：老师可带校区与可排时间录入
+// 一期 addSlot/removeSlot/setCampuses 直接生效（管理员专用）
+// 二期老师端走 submitChange 审批流
 const { F, queryAll, insertOne, updateById, removeById } = require('./common/pgdb')
 const { requireAuth } = require('./common/auth')
 const { wrap } = require('./common/resp')
@@ -9,17 +11,16 @@ function bad(msg) {
   throw Object.assign(new Error(msg), { code: 400 })
 }
 
-// 保存可带校区（整体替换）
+// 保存可带校区（整体替换）—— 管理员专用，老师端走审批
 async function setCampuses(event) {
-  const payload = requireAuth(event, 'teacher')
-  const { campusIds } = event
-  if (!Array.isArray(campusIds)) bad('参数错误')
-  // 校验校区都存在
+  const payload = requireAuth(event, 'admin')
+  const { userId, campusIds } = event
+  if (!userId || !Array.isArray(campusIds)) bad('参数错误')
   if (campusIds.length) {
     const found = await queryAll('campuses', { id: F.in(campusIds) }, { limit: 100 })
     if (found.length !== campusIds.length) bad('包含不存在的校区')
   }
-  const rows = await queryAll('teachers', { userId: payload.uid }, { limit: 1 })
+  const rows = await queryAll('teachers', { userId }, { limit: 1 })
   if (!rows.length) bad('老师信息不存在')
   await updateById('teachers', rows[0].id, { campuses: campusIds })
   return { done: true }
@@ -39,35 +40,35 @@ function validateSlot({ type, weekday, date, startTime, endTime }) {
   }
 }
 
-// 新增可排时段
+// 新增可排时段 —— 管理员专用，老师端走审批
 async function addSlot(event) {
-  const payload = requireAuth(event, 'teacher')
-  const { type, weekday, date, startTime, endTime } = event
+  const payload = requireAuth(event, 'admin')
+  const { userId, type, weekday, date, startTime, endTime } = event
+  if (!userId) bad('参数错误')
   validateSlot(event)
-  const existing = await queryAll('availabilities', { teacherId: payload.uid }, { limit: 1000 })
+  const existing = await queryAll('availabilities', { teacherId: userId }, { limit: 1000 })
   const candidate = { type, weekday: Number(weekday), date, startTime, endTime }
   if (slotOverlapsExisting(existing, candidate)) {
     bad('与既有时段重叠')
   }
   const res = await insertOne('availabilities', {
-    teacherId: payload.uid,
+    teacherId: userId,
     type,
     weekday: type === 'weekly' ? Number(weekday) : null,
     date: type === 'date' ? date : null,
     startTime, endTime,
-    approvalStatus: 'approved' // 一期直接生效，二期接入审批流
+    approvalStatus: 'approved'
   })
   return { slotId: res.id }
 }
 
-// 删除时段
+// 删除时段 —— 管理员专用
 async function removeSlot(event) {
-  const payload = requireAuth(event, 'teacher')
+  const payload = requireAuth(event, 'admin')
   const { slotId } = event
   if (!slotId) bad('参数错误')
   const rows = await queryAll('availabilities', { id: slotId }, { limit: 1 })
   if (!rows.length) bad('时段不存在')
-  if (rows[0].teacherId !== payload.uid) throw Object.assign(new Error('只能删除自己的时段'), { code: 403 })
   await removeById('availabilities', slotId)
   return { done: true }
 }
@@ -88,7 +89,101 @@ async function listMy(event) {
   }
 }
 
-const handlers = { setCampuses, addSlot, removeSlot, listMy }
+// ========== 二期：审批流 ==========
+
+// 老师提交时间+校区修改审批
+async function submitChange(event) {
+  const payload = requireAuth(event, 'teacher')
+  const { slots, campuses } = event
+  if (!Array.isArray(slots) || !Array.isArray(campuses)) bad('参数错误')
+
+  // 1. 校验无 pending 单
+  const pending = await queryAll('approvals', {
+    targetId: payload.uid, type: 'availability_change', status: 'pending'
+  }, { limit: 1 })
+  if (pending.length) bad('已有待审批申请，请等待审批或撤回')
+
+  // 2. 校验时段合法性 + 内部不重叠
+  const normalized = []
+  for (const s of slots) {
+    validateSlot(s)
+    normalized.push({
+      type: s.type,
+      weekday: s.type === 'weekly' ? Number(s.weekday) : null,
+      date: s.type === 'date' ? s.date : null,
+      startTime: s.startTime,
+      endTime: s.endTime
+    })
+  }
+  for (let i = 0; i < normalized.length; i++) {
+    if (slotOverlapsExisting(normalized.slice(0, i), normalized[i])) {
+      bad('时段之间存在重叠')
+    }
+  }
+
+  // 3. 校验校区存在
+  if (campuses.length) {
+    const found = await queryAll('campuses', { id: F.in(campuses) }, { limit: 100 })
+    if (found.length !== campuses.length) bad('包含不存在的校区')
+  }
+
+  // 4. 写入审批单（不修改 availabilities/teachers）
+  const res = await insertOne('approvals', {
+    type: 'availability_change',
+    targetId: payload.uid,
+    submitterId: payload.uid,
+    status: 'pending',
+    payload: { slots: normalized, campuses }
+  })
+  return { approvalId: res.id }
+}
+
+// 查询当前待审批申请
+async function getMyPendingChange(event) {
+  const payload = requireAuth(event, 'teacher')
+  const list = await queryAll('approvals', {
+    targetId: payload.uid, type: 'availability_change', status: 'pending'
+  }, { orderBy: 'createdAt', orderDir: 'desc', limit: 1 })
+  return list.length ? formatApproval(list[0]) : null
+}
+
+// 我的审批历史
+async function listMyApprovals(event) {
+  const payload = requireAuth(event, 'teacher')
+  const list = await queryAll('approvals', {
+    targetId: payload.uid, type: 'availability_change'
+  }, { orderBy: 'createdAt', orderDir: 'desc', limit: 50 })
+  return { list: list.map(formatApproval) }
+}
+
+// 撤回待审批申请
+async function withdrawApproval(event) {
+  const payload = requireAuth(event, 'teacher')
+  const { approvalId } = event
+  if (!approvalId) bad('参数错误')
+  const rows = await queryAll('approvals', { id: approvalId }, { limit: 1 })
+  if (!rows.length) bad('审批单不存在')
+  if (rows[0].submitterId !== payload.uid) throw Object.assign(new Error('只能撤回自己的申请'), { code: 403 })
+  if (rows[0].status !== 'pending') bad('该申请已处理，无法撤回')
+  await updateById('approvals', approvalId, { status: 'withdrawn' })
+  return { done: true }
+}
+
+function formatApproval(a) {
+  return {
+    approvalId: a.id,
+    status: a.status,
+    payload: a.payload,
+    rejectReason: a.rejectReason || '',
+    createdAt: a.createdAt,
+    updatedAt: a.updatedAt
+  }
+}
+
+const handlers = {
+  setCampuses, addSlot, removeSlot, listMy,
+  submitChange, getMyPendingChange, listMyApprovals, withdrawApproval
+}
 
 exports.main = wrap(async (event) => {
   const handler = handlers[event.action]

@@ -102,9 +102,15 @@ CREATE TABLE approvals (
   "targetId" text NOT NULL DEFAULT '',
   status text NOT NULL DEFAULT 'pending',
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  "submitterId" text NOT NULL DEFAULT '',
+  "approverId" text NOT NULL DEFAULT '',
+  "rejectReason" text NOT NULL DEFAULT '',
   "createdAt" timestamptz NOT NULL DEFAULT now(),
   "updatedAt" timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX approvals_target_idx ON approvals("targetId");
+CREATE INDEX approvals_status_idx ON approvals(status);
+CREATE INDEX approvals_submitter_idx ON approvals("submitterId");
 
 CREATE TABLE messages (
   id text PRIMARY KEY,

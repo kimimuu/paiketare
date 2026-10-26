@@ -51,7 +51,7 @@ async function main() {
   // ===== 第二幕：老师改密 / 选校区 / 录时间 =====
   console.log('第二幕：老师端（张老师）')
   let r = await call(gw, 'auth', { action: 'login', phone: '13900000001', password: '000001' })
-  let teaTok
+  let teaTok, teaUid
   if (r.code === 0) {
     ok(true, '老师初始密码登录')
     teaTok = r.data.token
@@ -66,6 +66,7 @@ async function main() {
   }
   ok(r.code === 0, '老师登录', r)
   teaTok = r.data.token
+  teaUid = r.data.user.uid
 
   // 管理员会话（用于读基础数据）
   r = await call(gw, 'auth', { action: 'login', phone: '13800000000', password: 'admin123456' })
@@ -77,12 +78,12 @@ async function main() {
   ok(campus && campus.name === '旗舰校区', '读取校区', campuses)
   const campusId = campus.campusId
 
-  r = await call(gw, 'availability', { action: 'setCampuses', token: teaTok, campusIds: [campusId] })
-  ok(r.code === 0, '老师选可带校区', r)
+  r = await call(gw, 'availability', { action: 'setCampuses', token: admTok, userId: teaUid, campusIds: [campusId] })
+  ok(r.code === 0, '管理员设置老师可带校区', r)
 
   const tomorrow = addDays(new Date().toISOString().slice(0, 10), 1)
-  r = await call(gw, 'availability', { action: 'addSlot', token: teaTok, type: 'date', date: tomorrow, startTime: '18:00', endTime: '21:00' })
-  ok(r.code === 0 || (r.code === 400 && /重叠/.test(r.message || '')), '录入可用时段（明天 18:00-21:00）', r)
+  r = await call(gw, 'availability', { action: 'addSlot', token: admTok, userId: teaUid, type: 'date', date: tomorrow, startTime: '18:00', endTime: '21:00' })
+  ok(r.code === 0 || (r.code === 400 && /重叠/.test(r.message || '')), '管理员录入老师可用时段（明天 18:00-21:00）', r)
   r = await call(gw, 'availability', { action: 'listMy', token: teaTok })
   ok(r.code === 0 && r.data.slots.length >= 1 && r.data.campuses.length === 1, '老师录入概览', r.data)
 

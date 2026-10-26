@@ -2,6 +2,16 @@
   "envId": "profitable-newt-d2fl5wq6f366cf13",
   "version": "2.0",
   "$schema": "https://framework-1302835657.cos.ap-shanghai.myqcloud.com/cloudbase/schema/v1.json",
+  "functionRootPath": "cloudfunctions",
+  "functions": [
+    { "name": "hello", "runtime": "Nodejs18.15" },
+    { "name": "auth", "runtime": "Nodejs18.15" },
+    { "name": "baseData", "runtime": "Nodejs18.15" },
+    { "name": "availability", "runtime": "Nodejs18.15" },
+    { "name": "schedule", "runtime": "Nodejs18.15" },
+    { "name": "course", "runtime": "Nodejs18.15" },
+    { "name": "approval", "runtime": "Nodejs18.15" }
+  ],
   "framework": {
     "name": "paike",
     "plugins": {
@@ -16,12 +26,13 @@
         "use": "@cloudbase/framework-plugin-function",
         "inputs": {
           "functions": [
-            { "name": "hello" },
-            { "name": "auth" },
-            { "name": "baseData" },
-            { "name": "availability" },
-            { "name": "schedule" },
-            { "name": "course" }
+            { "name": "hello", "runtime": "Nodejs18.15" },
+            { "name": "auth", "runtime": "Nodejs18.15" },
+            { "name": "baseData", "runtime": "Nodejs18.15" },
+            { "name": "availability", "runtime": "Nodejs18.15" },
+            { "name": "schedule", "runtime": "Nodejs18.15" },
+            { "name": "course", "runtime": "Nodejs18.15" },
+            { "name": "approval", "runtime": "Nodejs18.15" }
           ],
           "functionRootPath": "cloudfunctions"
         }

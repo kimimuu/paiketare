@@ -3,7 +3,7 @@ const fs = require('fs')
 const path = require('path')
 
 const COMMON = path.join(__dirname, '../cloudfunctions/common')
-const FUNCTIONS = ['auth', 'baseData', 'availability', 'schedule', 'course']
+const FUNCTIONS = ['auth', 'baseData', 'availability', 'schedule', 'course', 'approval']
 
 for (const fn of FUNCTIONS) {
   const targetDir = path.join(__dirname, '../cloudfunctions', fn, 'common')
