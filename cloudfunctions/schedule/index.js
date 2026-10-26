@@ -1,30 +1,12 @@
 // schedule 云函数：排课候选老师筛选
-const { db, _, COLLECTIONS } = require('./common/db')
+const { F, queryAll } = require('./common/pgdb')
 const { requireAuth } = require('./common/auth')
 const { wrap } = require('./common/resp')
 const { isValidDateStr, isValidTimeStr, toMinutes, todayStr } = require('./common/timeUtils')
 const { filterCandidates, BLOCKING_STATUS, buildOccurrences } = require('./common/scheduleCore')
 
-const teachers = db.collection(COLLECTIONS.teachers)
-const users = db.collection(COLLECTIONS.users)
-const availabilities = db.collection(COLLECTIONS.availabilities)
-const sessions = db.collection(COLLECTIONS.sessions)
-
 function bad(msg) {
   throw Object.assign(new Error(msg), { code: 400 })
-}
-
-// 分页拉取全部记录（绕过单次 1000 条上限）
-async function queryAll(collection, where) {
-  const all = []
-  let offset = 0
-  while (true) {
-    const { data } = await collection.where(where).skip(offset).limit(1000).get()
-    all.push(...data)
-    if (data.length < 1000) break
-    offset += 1000
-  }
-  return all
 }
 
 // 入参校验，返回归一化的需求对象
@@ -45,7 +27,7 @@ function validateRequirement(event) {
   }
   if (type === 'regular') {
     const weekday = Number(event.weekday)
-    if (!(weekday >= 0 && weekday <= 6)) bad('请选择星期几')
+    if (!(weekday >= 0 && weekday <= 6)) bad('星期几不正确')
     const duration = Number(event.duration)
     if (![60, 90, 120].includes(duration)) bad('单次时长只能选 1h / 1.5h / 2h')
     const totalSessions = Number(event.totalSessions)
@@ -70,28 +52,29 @@ async function filterTeachers(event) {
   requireAuth(event, 'admin')
   const req = validateRequirement(event)
 
-  // 1. 可带该校区的老师
-  const teacherDocs = await queryAll(teachers, { campuses: req.campusId })
+  // 1. 全量老师，JS 过滤可带该校区（campuses 为 jsonb 数组，量小无需数据库包含查询）
+  const allTeachers = await queryAll('teachers')
+  const teacherDocs = allTeachers.filter(t => (t.campuses || []).includes(req.campusId))
   if (!teacherDocs.length) return { list: [] }
   const teacherIds = teacherDocs.map(t => t.userId)
 
   // 2. 可用时段 + 占用 session（只取系列涉及的日期）
   const dates = [...new Set(buildOccurrences(req).map(o => o.date))]
   const [slots, busySessions, userDocs] = await Promise.all([
-    queryAll(availabilities, { teacherId: _.in(teacherIds) }),
-    queryAll(sessions, {
-      teacherId: _.in(teacherIds),
-      date: _.in(dates),
-      status: _.in(BLOCKING_STATUS)
+    queryAll('availabilities', { teacherId: F.in(teacherIds) }),
+    queryAll('sessions', {
+      teacherId: F.in(teacherIds),
+      date: F.in(dates),
+      status: F.in(BLOCKING_STATUS)
     }),
-    queryAll(users, { _id: _.in(teacherIds), role: 'teacher', status: 'active' })
+    queryAll('users', { id: F.in(teacherIds), role: 'teacher', status: 'active' })
   ])
 
   const slotsBy = {}
   for (const s of slots) (slotsBy[s.teacherId] = slotsBy[s.teacherId] || []).push(s)
   const sessionsBy = {}
   for (const s of busySessions) (sessionsBy[s.teacherId] = sessionsBy[s.teacherId] || []).push(s)
-  const activeIds = new Set(userDocs.map(u => u._id))
+  const activeIds = new Set(userDocs.map(u => u.id))
 
   // 3. 组装候选并执行核心筛选
   const candidates = teacherDocs
@@ -106,7 +89,7 @@ async function filterTeachers(event) {
 
   // 4. 返回通过者的展示信息（顺序保持数据库返回顺序）
   const nameBy = {}
-  for (const u of userDocs) nameBy[u._id] = u.name
+  for (const u of userDocs) nameBy[u.id] = u.name
   const list = teacherDocs
     .filter(t => passedIds.has(t.userId))
     .map(t => ({ teacherId: t.userId, name: nameBy[t.userId] || '', campuses: t.campuses || [] }))

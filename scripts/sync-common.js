@@ -7,6 +7,7 @@ const FUNCTIONS = ['auth', 'baseData', 'availability', 'schedule', 'course']
 
 for (const fn of FUNCTIONS) {
   const targetDir = path.join(__dirname, '../cloudfunctions', fn, 'common')
+  fs.rmSync(targetDir, { recursive: true, force: true })
   fs.mkdirSync(targetDir, { recursive: true })
   for (const file of fs.readdirSync(COMMON)) {
     if (file.endsWith('.js')) {

@@ -1,46 +1,26 @@
 // course 云函数：排课发起、老师确认/拒绝、课表查询、管理端待办
-const { db, _, COLLECTIONS } = require('./common/db')
+const { F, queryAll, insertOne, updateById } = require('./common/pgdb')
 const { requireAuth } = require('./common/auth')
 const { wrap } = require('./common/resp')
 const { isValidDateStr, isValidTimeStr, toMinutes, toTimeStr, todayStr } = require('./common/timeUtils')
 const { filterCandidates, buildOccurrences, BLOCKING_STATUS, sessionConflictsWithOcc } = require('./common/scheduleCore')
 
-const courses = db.collection(COLLECTIONS.courses)
-const sessions = db.collection(COLLECTIONS.sessions)
-const teachers = db.collection(COLLECTIONS.teachers)
-const users = db.collection(COLLECTIONS.users)
-const availabilities = db.collection(COLLECTIONS.availabilities)
-const students = db.collection(COLLECTIONS.students)
-const campuses = db.collection(COLLECTIONS.campuses)
-
 function bad(msg) {
   throw Object.assign(new Error(msg), { code: 400 })
 }
 
-async function queryAll(collection, where) {
-  const all = []
-  let offset = 0
-  while (true) {
-    const { data } = await collection.where(where).skip(offset).limit(1000).get()
-    all.push(...data)
-    if (data.length < 1000) break
-    offset += 1000
-  }
-  return all
-}
-
 // 创建前校验：老师必须在候选筛选中通过（防止绕过筛选直接调用）
 async function assertTeacherEligible(req, teacherId) {
-  const { data: t } = await teachers.where({ userId: teacherId }).limit(1).get()
-  if (!t.length) bad('老师不存在')
+  const tRows = await queryAll('teachers', { userId: teacherId }, { limit: 1 })
+  if (!tRows.length) bad('老师不存在')
   const dates = [...new Set(buildOccurrences(req).map(o => o.date))]
   const [slots, busy] = await Promise.all([
-    queryAll(availabilities, { teacherId }),
-    queryAll(sessions, { teacherId, date: _.in(dates), status: _.in(BLOCKING_STATUS) })
+    queryAll('availabilities', { teacherId }),
+    queryAll('sessions', { teacherId, date: F.in(dates), status: F.in(BLOCKING_STATUS) })
   ])
   const passed = filterCandidates(req, [{
     teacherId,
-    campuses: t[0].campuses || [],
+    campuses: tRows[0].campuses || [],
     slots,
     sessions: busy
   }])
@@ -50,16 +30,14 @@ async function assertTeacherEligible(req, teacherId) {
 async function createCourseSessions(courseId, req, teacherId, studentId) {
   const occurrences = buildOccurrences(req)
   for (const occ of occurrences) {
-    await sessions.add({
+    await insertOne('sessions', {
       courseId,
       teacherId,
       campusId: req.campusId,
       date: occ.date,
       startTime: toTimeStr(occ.startMin),
       endTime: toTimeStr(occ.endMin),
-      status: 'pending',
-      createdAt: new Date(),
-      updatedAt: new Date()
+      status: 'pending'
     })
   }
   return occurrences.length
@@ -77,10 +55,10 @@ async function createTrial(event) {
   const req = { campusId, type: 'trial', date, startTime, duration: 30, fromDate: todayStr() }
   await assertTeacherEligible(req, teacherId)
 
-  const res = await courses.add({
+  const res = await insertOne('courses', {
     type: 'trial', studentId, teacherId, campusId,
     duration: 30, totalSessions: 1,
-    status: 'pending', createdAt: new Date(), updatedAt: new Date()
+    status: 'pending'
   })
   await createCourseSessions(res.id, req, teacherId, studentId)
   return { courseId: res.id }
@@ -103,10 +81,10 @@ async function createRegular(event) {
   const req = { campusId, type: 'regular', weekday, startTime, duration, totalSessions, fromDate: todayStr() }
   await assertTeacherEligible(req, teacherId)
 
-  const res = await courses.add({
+  const res = await insertOne('courses', {
     type: 'regular', studentId, teacherId, campusId,
     duration, totalSessions,
-    status: 'pending', createdAt: new Date(), updatedAt: new Date()
+    status: 'pending'
   })
   const count = await createCourseSessions(res.id, req, teacherId, studentId)
   return { courseId: res.id, sessionCount: count }
@@ -117,18 +95,18 @@ async function confirm(event) {
   const payload = requireAuth(event, 'teacher')
   const { courseId } = event
   if (!courseId) bad('参数错误')
-  const { data: c } = await courses.where({ _id: courseId }).limit(1).get()
-  if (!c.length) bad('课程不存在')
-  const course = c[0]
+  const courseRows = await queryAll('courses', { id: courseId }, { limit: 1 })
+  if (!courseRows.length) bad('课程不存在')
+  const course = courseRows[0]
   if (course.teacherId !== payload.uid) throw Object.assign(new Error('只能确认自己的课程'), { code: 403 })
   if (course.status !== 'pending') bad('课程不在待确认状态')
 
-  const pending = await queryAll(sessions, { courseId, status: 'pending' })
+  const pending = await queryAll('sessions', { courseId, status: 'pending' })
   // 二次校验：与本老师其他占用 session 冲突则确认失败
-  const others = await queryAll(sessions, {
+  const others = await queryAll('sessions', {
     teacherId: payload.uid,
-    status: _.in(BLOCKING_STATUS),
-    courseId: _.neq(courseId)
+    status: F.in(BLOCKING_STATUS),
+    courseId: F.neq(courseId)
   })
   for (const s of pending) {
     const occ = { date: s.date, startMin: toMinutes(s.startTime), endMin: toMinutes(s.endTime) }
@@ -138,9 +116,9 @@ async function confirm(event) {
     }
   }
   for (const s of pending) {
-    await sessions.doc(s._id).update({ status: 'confirmed', updatedAt: new Date() })
+    await updateById('sessions', s.id, { status: 'confirmed' })
   }
-  await courses.doc(courseId).update({ status: 'confirmed', updatedAt: new Date() })
+  await updateById('courses', courseId, { status: 'confirmed' })
   return { done: true }
 }
 
@@ -149,36 +127,36 @@ async function reject(event) {
   const payload = requireAuth(event, 'teacher')
   const { courseId } = event
   if (!courseId) bad('参数错误')
-  const { data: c } = await courses.where({ _id: courseId }).limit(1).get()
-  if (!c.length) bad('课程不存在')
-  if (c[0].teacherId !== payload.uid) throw Object.assign(new Error('只能拒绝自己的课程'), { code: 403 })
-  if (c[0].status !== 'pending') bad('课程不在待确认状态')
-  const pending = await queryAll(sessions, { courseId, status: 'pending' })
+  const courseRows = await queryAll('courses', { id: courseId }, { limit: 1 })
+  if (!courseRows.length) bad('课程不存在')
+  if (courseRows[0].teacherId !== payload.uid) throw Object.assign(new Error('只能拒绝自己的课程'), { code: 403 })
+  if (courseRows[0].status !== 'pending') bad('课程不在待确认状态')
+  const pending = await queryAll('sessions', { courseId, status: 'pending' })
   for (const s of pending) {
-    await sessions.doc(s._id).update({ status: 'cancelled', updatedAt: new Date() })
+    await updateById('sessions', s.id, { status: 'cancelled' })
   }
-  await courses.doc(courseId).update({ status: 'rejected', updatedAt: new Date() })
+  await updateById('courses', courseId, { status: 'rejected' })
   return { done: true }
 }
 
 // 名称映射辅助
 async function nameMaps({ studentIds = [], teacherIds = [], campusIds = [] }) {
   const [stu, tea, cam] = await Promise.all([
-    studentIds.length ? queryAll(students, { _id: _.in(studentIds) }) : [],
-    teacherIds.length ? queryAll(users, { _id: _.in(teacherIds) }) : [],
-    campusIds.length ? queryAll(campuses, { _id: _.in(campusIds) }) : []
+    studentIds.length ? queryAll('students', { id: F.in(studentIds) }) : [],
+    teacherIds.length ? queryAll('users', { id: F.in(teacherIds) }) : [],
+    campusIds.length ? queryAll('campuses', { id: F.in(campusIds) }) : []
   ])
   return {
-    student: Object.fromEntries(stu.map(x => [x._id, x.name])),
-    teacher: Object.fromEntries(tea.map(x => [x._id, x.name])),
-    campus: Object.fromEntries(cam.map(x => [x._id, x.name]))
+    student: Object.fromEntries(stu.map(x => [x.id, x.name])),
+    teacher: Object.fromEntries(tea.map(x => [x.id, x.name])),
+    campus: Object.fromEntries(cam.map(x => [x.id, x.name]))
   }
 }
 
 function formatSession(s, maps, courseById) {
   const course = courseById[s.courseId] || {}
   return {
-    sessionId: s._id,
+    sessionId: s.id,
     courseId: s.courseId,
     courseType: course.type,
     date: s.date,
@@ -196,18 +174,18 @@ async function schedule(event) {
   const payload = requireAuth(event)
   const { startDate, endDate } = event
   if (!isValidDateStr(startDate) || !isValidDateStr(endDate)) bad('日期范围不正确')
-  const where = { date: _.gte(startDate).and(_.lte(endDate)) }
+  const where = { date: F.and(F.gte(startDate), F.lte(endDate)) }
   if (payload.role === 'teacher') {
     where.teacherId = payload.uid
   } else {
     if (event.campusId) where.campusId = event.campusId
     if (event.teacherId) where.teacherId = event.teacherId
   }
-  const list = await queryAll(sessions, where)
+  const list = await queryAll('sessions', where)
   const active = list.filter(s => s.status !== 'cancelled')
   const courseIds = [...new Set(active.map(s => s.courseId))]
-  const courseList = courseIds.length ? await queryAll(courses, { _id: _.in(courseIds) }) : []
-  const courseById = Object.fromEntries(courseList.map(c => [c._id, c]))
+  const courseList = courseIds.length ? await queryAll('courses', { id: F.in(courseIds) }) : []
+  const courseById = Object.fromEntries(courseList.map(c => [c.id, c]))
   const maps = await nameMaps({
     studentIds: [...new Set(courseList.map(c => c.studentId))],
     teacherIds: [...new Set(active.map(s => s.teacherId))],
@@ -219,11 +197,11 @@ async function schedule(event) {
 // 老师端待办：待确认课程（含每次课时间）
 async function todoList(event) {
   const payload = requireAuth(event, 'teacher')
-  const pending = await queryAll(sessions, { teacherId: payload.uid, status: 'pending' })
+  const pending = await queryAll('sessions', { teacherId: payload.uid, status: 'pending' })
   if (!pending.length) return { list: [] }
   const courseIds = [...new Set(pending.map(s => s.courseId))]
-  const courseList = await queryAll(courses, { _id: _.in(courseIds), status: 'pending' })
-  const validIds = new Set(courseList.map(c => c._id))
+  const courseList = await queryAll('courses', { id: F.in(courseIds), status: 'pending' })
+  const validIds = new Set(courseList.map(c => c.id))
   const maps = await nameMaps({
     studentIds: [...new Set(courseList.map(c => c.studentId))],
     campusIds: [...new Set(pending.map(s => s.campusId))]
@@ -237,11 +215,11 @@ async function todoList(event) {
   }
   return {
     list: courseList.map(c => ({
-      courseId: c._id,
+      courseId: c.id,
       type: c.type,
       studentName: maps.student[c.studentId] || '',
       totalSessions: c.totalSessions,
-      sessions: (byCourse[c._id] || []).sort((a, b) => a.date < b.date ? -1 : 1)
+      sessions: (byCourse[c.id] || []).sort((a, b) => a.date < b.date ? -1 : 1)
     }))
   }
 }
@@ -249,7 +227,7 @@ async function todoList(event) {
 // 管理端待办：待确认 + 被拒绝课程
 async function adminTodo(event) {
   requireAuth(event, 'admin')
-  const list = await queryAll(courses, { status: _.in(['pending', 'rejected']) })
+  const list = await queryAll('courses', { status: F.in(['pending', 'rejected']) })
   if (!list.length) return { list: [] }
   const maps = await nameMaps({
     studentIds: [...new Set(list.map(c => c.studentId))],
@@ -258,7 +236,7 @@ async function adminTodo(event) {
   })
   return {
     list: list.map(c => ({
-      courseId: c._id,
+      courseId: c.id,
       type: c.type,
       status: c.status,
       studentName: maps.student[c.studentId] || '',
@@ -275,9 +253,9 @@ async function dashboardStats(event) {
   requireAuth(event, 'admin')
   const today = todayStr()
   const [todaySessions, pendingCourses, pendingTeachers] = await Promise.all([
-    queryAll(sessions, { date: today, status: _.in(BLOCKING_STATUS) }),
-    queryAll(courses, { status: 'pending' }),
-    queryAll(users, { role: 'teacher', status: 'pending' })
+    queryAll('sessions', { date: today, status: F.in(BLOCKING_STATUS) }),
+    queryAll('courses', { status: 'pending' }),
+    queryAll('users', { role: 'teacher', status: 'pending' })
   ])
   return {
     todayCount: todaySessions.length,

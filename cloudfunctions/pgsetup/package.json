@@ -1,0 +1,8 @@
+{
+  "name": "pgsetup",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "tencentcloud-sdk-nodejs-tcb": "^4.1.332"
+  }
+}

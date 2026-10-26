@@ -1,13 +1,9 @@
 // availability 云函数：老师可带校区与可排时间录入（一期直接生效，预留 approvalStatus 字段）
-const { db, _, COLLECTIONS } = require('./common/db')
+const { F, queryAll, insertOne, updateById, removeById } = require('./common/pgdb')
 const { requireAuth } = require('./common/auth')
 const { wrap } = require('./common/resp')
 const { isValidDateStr, isValidTimeStr, toMinutes, todayStr } = require('./common/timeUtils')
 const { slotOverlapsExisting } = require('./common/scheduleCore')
-
-const teachers = db.collection(COLLECTIONS.teachers)
-const campuses = db.collection(COLLECTIONS.campuses)
-const availabilities = db.collection(COLLECTIONS.availabilities)
 
 function bad(msg) {
   throw Object.assign(new Error(msg), { code: 400 })
@@ -20,15 +16,12 @@ async function setCampuses(event) {
   if (!Array.isArray(campusIds)) bad('参数错误')
   // 校验校区都存在
   if (campusIds.length) {
-    const { data } = await campuses.where({ _id: _.in(campusIds) }).limit(100).get()
-    if (data.length !== campusIds.length) bad('包含不存在的校区')
+    const found = await queryAll('campuses', { id: F.in(campusIds) }, { limit: 100 })
+    if (found.length !== campusIds.length) bad('包含不存在的校区')
   }
-  const { data } = await teachers.where({ userId: payload.uid }).limit(1).get()
-  if (!data.length) bad('老师信息不存在')
-  await teachers.doc(data[0]._id).update({
-    campuses: campusIds,
-    updatedAt: new Date()
-  })
+  const rows = await queryAll('teachers', { userId: payload.uid }, { limit: 1 })
+  if (!rows.length) bad('老师信息不存在')
+  await updateById('teachers', rows[0].id, { campuses: campusIds })
   return { done: true }
 }
 
@@ -51,20 +44,18 @@ async function addSlot(event) {
   const payload = requireAuth(event, 'teacher')
   const { type, weekday, date, startTime, endTime } = event
   validateSlot(event)
-  const { data: existing } = await availabilities.where({ teacherId: payload.uid }).limit(1000).get()
+  const existing = await queryAll('availabilities', { teacherId: payload.uid }, { limit: 1000 })
   const candidate = { type, weekday: Number(weekday), date, startTime, endTime }
   if (slotOverlapsExisting(existing, candidate)) {
     bad('与既有时段重叠')
   }
-  const res = await availabilities.add({
+  const res = await insertOne('availabilities', {
     teacherId: payload.uid,
     type,
     weekday: type === 'weekly' ? Number(weekday) : null,
     date: type === 'date' ? date : null,
     startTime, endTime,
-    approvalStatus: 'approved', // 一期直接生效，二期接入审批流
-    createdAt: new Date(),
-    updatedAt: new Date()
+    approvalStatus: 'approved' // 一期直接生效，二期接入审批流
   })
   return { slotId: res.id }
 }
@@ -74,22 +65,24 @@ async function removeSlot(event) {
   const payload = requireAuth(event, 'teacher')
   const { slotId } = event
   if (!slotId) bad('参数错误')
-  const { data } = await availabilities.where({ _id: slotId }).limit(1).get()
-  if (!data.length) bad('时段不存在')
-  if (data[0].teacherId !== payload.uid) throw Object.assign(new Error('只能删除自己的时段'), { code: 403 })
-  await availabilities.doc(slotId).remove()
+  const rows = await queryAll('availabilities', { id: slotId }, { limit: 1 })
+  if (!rows.length) bad('时段不存在')
+  if (rows[0].teacherId !== payload.uid) throw Object.assign(new Error('只能删除自己的时段'), { code: 403 })
+  await removeById('availabilities', slotId)
   return { done: true }
 }
 
 // 我的录入概览
 async function listMy(event) {
   const payload = requireAuth(event, 'teacher')
-  const { data: t } = await teachers.where({ userId: payload.uid }).limit(1).get()
-  const { data: slots } = await availabilities.where({ teacherId: payload.uid }).limit(1000).get()
+  const [tRows, slots] = await Promise.all([
+    queryAll('teachers', { userId: payload.uid }, { limit: 1 }),
+    queryAll('availabilities', { teacherId: payload.uid }, { limit: 1000 })
+  ])
   return {
-    campuses: t.length ? (t[0].campuses || []) : [],
+    campuses: tRows.length ? (tRows[0].campuses || []) : [],
     slots: slots.map(s => ({
-      slotId: s._id, type: s.type, weekday: s.weekday, date: s.date,
+      slotId: s.id, type: s.type, weekday: s.weekday, date: s.date,
       startTime: s.startTime, endTime: s.endTime
     }))
   }
