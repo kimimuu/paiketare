@@ -4,6 +4,7 @@ const routes = [
   { path: '/', redirect: '/login' },
   { path: '/login', component: () => import('../views/Login.vue') },
   { path: '/register', component: () => import('../views/Register.vue') },
+  { path: '/change-password', component: () => import('../views/ChangePassword.vue') },
   // 老师端
   { path: '/teacher/home', component: () => import('../views/teacher/Home.vue') },
   { path: '/teacher/availability', component: () => import('../views/teacher/Availability.vue') },
@@ -29,6 +30,9 @@ router.beforeEach((to) => {
   const user = JSON.parse(localStorage.getItem('user') || 'null')
   if (!user && to.path !== '/login' && to.path !== '/register') {
     return '/login'
+  }
+  if (user && user.needChangePassword && to.path !== '/change-password') {
+    return '/change-password'
   }
   if (user && (to.path === '/login' || to.path === '/')) {
     return user.role === 'admin' ? '/admin/dashboard' : '/teacher/home'
