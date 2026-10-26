@@ -75,10 +75,12 @@ CREATE TABLE courses (
   duration integer NOT NULL,
   "totalSessions" integer NOT NULL,
   status text NOT NULL DEFAULT 'pending',
+  "endReason" text NOT NULL DEFAULT '',
   "createdAt" timestamptz NOT NULL DEFAULT now(),
   "updatedAt" timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX courses_status_idx ON courses(status);
+CREATE INDEX courses_end_reason_idx ON courses("endReason");
 
 CREATE TABLE sessions (
   id text PRIMARY KEY,
