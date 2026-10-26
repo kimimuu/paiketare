@@ -1,0 +1,24 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  background: #f7f8fa;
+  color: #323233;
+}
+
+/* 桌面端限定内容最大宽度，居中显示，模拟移动端体验 */
+#app {
+  max-width: 750px;
+  margin: 0 auto;
+  min-height: 100vh;
+  background: #f7f8fa;
+}
+
+/* 管理端页面在桌面端使用更宽布局 */
+#app:has(.admin-wide) {
+  max-width: 1200px;
+}

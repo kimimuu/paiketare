@@ -1,0 +1,15 @@
+{
+  "name": "paike",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "test": "npm --prefix frontend run test",
+    "deploy:web": "npm run build && tcb hosting deploy frontend/dist -e profitable-newt-d2fl5wq6f366cf13",
+    "deploy:functions": "tcb fn deploy -e profitable-newt-d2fl5wq6f366cf13",
+    "deploy": "npm run deploy:functions && npm run deploy:web"
+  },
+  "devDependencies": {
+    "@cloudbase/cli": "^2.6.3"
+  }
+}
