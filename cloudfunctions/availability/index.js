@@ -1,6 +1,4 @@
 // availability 云函数：老师可带校区与可排时间录入
-// 一期 addSlot/removeSlot/setCampuses 直接生效（管理员专用）
-// 二期老师端走 submitChange 审批流
 const { F, queryAll, insertOne, updateById, removeById } = require('./common/pgdb')
 const { requireAuth } = require('./common/auth')
 const { wrap } = require('./common/resp')
@@ -9,6 +7,13 @@ const { slotOverlapsExisting } = require('./common/scheduleCore')
 
 function bad(msg) {
   throw Object.assign(new Error(msg), { code: 400 })
+}
+
+// 站内消息（内嵌）
+async function sendMessage({ toId, fromId = '', type = '', content, linkType = '', linkId = '' }) {
+  try {
+    await insertOne('messages', { fromId, toId, type, content, linkType, linkId, read: false })
+  } catch (e) { console.warn('sendMessage failed:', e.message) }
 }
 
 // 保存可带校区（整体替换）—— 管理员专用，老师端走审批
@@ -135,6 +140,19 @@ async function submitChange(event) {
     status: 'pending',
     payload: { slots: normalized, campuses }
   })
+
+  // D: 通知所有 admin 有新审批待处理
+  const admins = await queryAll('users', { role: 'admin', status: 'active' })
+  const me = await queryAll('users', { id: payload.uid }, { limit: 1 })
+  const name = me.length ? me[0].name : ''
+  for (const a of admins) {
+    await sendMessage({
+      toId: a.id, fromId: payload.uid, type: 'new_approval',
+      content: `【新审批待处理】${name} 提交了时间/校区修改申请，请尽快审批`,
+      linkType: 'approval', linkId: res.id
+    })
+  }
+
   return { approvalId: res.id }
 }
 

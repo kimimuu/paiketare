@@ -1,6 +1,6 @@
 <template>
   <div class="admin-wide">
-    <van-nav-bar title="老师管理" left-arrow @click-left="$router.back()" />
+    <van-nav-bar title="老师管理" left-arrow @click-left="$router.back()" right-text="导出时段" @click-right="exportAvail" />
     <van-tabs v-model:active="tab" sticky>
       <!-- 老师列表 -->
       <van-tab title="老师列表">
@@ -152,6 +152,21 @@ async function load() {
     showToast(e.message)
   } finally {
     loading.value = false
+  }
+}
+
+// 导出老师可用时段
+async function exportAvail() {
+  try {
+    showToast({ message: '生成中...', forbidClick: true, duration: 0 })
+    const data = await call('course', { action: 'exportAvailabilities' })
+    const a = document.createElement('a')
+    a.href = data.dataUrl
+    a.download = data.fileName
+    a.click()
+    showToast('导出成功')
+  } catch (e) {
+    showToast(e.message || '导出失败')
   }
 }
 

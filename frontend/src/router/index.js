@@ -11,13 +11,15 @@ const routes = [
   { path: '/teacher/campuses', component: () => import('../views/teacher/Campuses.vue') },
   { path: '/teacher/todo', component: () => import('../views/teacher/Todo.vue') },
   { path: '/teacher/schedule', component: () => import('../views/teacher/Schedule.vue') },
+  { path: '/teacher/messages', component: () => import('../views/Messages.vue') },
   // 管理端
   { path: '/admin/dashboard', component: () => import('../views/admin/Dashboard.vue') },
   { path: '/admin/booking', component: () => import('../views/admin/Booking.vue') },
   { path: '/admin/schedule', component: () => import('../views/admin/Schedule.vue') },
   { path: '/admin/teachers', component: () => import('../views/admin/Teachers.vue') },
   { path: '/admin/students', component: () => import('../views/admin/Students.vue') },
-  { path: '/admin/campuses', component: () => import('../views/admin/Campuses.vue') }
+  { path: '/admin/campuses', component: () => import('../views/admin/Campuses.vue') },
+  { path: '/admin/messages', component: () => import('../views/Messages.vue') }
 ]
 
 const router = createRouter({

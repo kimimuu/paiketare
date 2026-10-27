@@ -118,11 +118,18 @@ CREATE TABLE messages (
   id text PRIMARY KEY,
   "fromId" text NOT NULL DEFAULT '',
   "toId" text NOT NULL DEFAULT '',
+  "type" text NOT NULL DEFAULT '',
   content text NOT NULL DEFAULT '',
+  "linkType" text NOT NULL DEFAULT '',
+  "linkId" text NOT NULL DEFAULT '',
   read boolean NOT NULL DEFAULT false,
+  "readAt" timestamptz,
   "createdAt" timestamptz NOT NULL DEFAULT now(),
   "updatedAt" timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX messages_to_id_idx ON messages("toId");
+CREATE INDEX messages_read_idx ON messages(read);
+CREATE INDEX messages_created_at_idx ON messages("createdAt" DESC);
 
 -- rpc 探针：返回实际连接身份
 CREATE OR REPLACE FUNCTION pg_identity_probe() RETURNS text

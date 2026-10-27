@@ -1,6 +1,6 @@
 <template>
   <div class="admin-wide">
-    <van-nav-bar title="课表" left-arrow @click-left="$router.back()" />
+    <van-nav-bar title="课表" left-arrow @click-left="$router.back()" right-text="导出" @click-right="exportExcel" />
     <van-tabs v-model:active="mode">
       <van-tab title="天" name="day" />
       <van-tab title="周" name="week" />
@@ -202,6 +202,25 @@ async function load() {
     sessions.value = (data.list || []).slice().sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime))
   } catch (e) {
     showToast(e.message)
+  }
+}
+
+// 导出 Excel
+async function exportExcel() {
+  try {
+    showToast({ message: '生成中...', forbidClick: true, duration: 0 })
+    const params = { action: 'exportSchedule', startDate: fmtDate(range.value.start), endDate: fmtDate(range.value.end) }
+    if (campusFilter.value) params.campusId = campusFilter.value
+    if (teacherFilter.value) params.teacherId = teacherFilter.value
+    const data = await call('course', params)
+    // 触发下载
+    const a = document.createElement('a')
+    a.href = data.dataUrl
+    a.download = data.fileName
+    a.click()
+    showToast('导出成功')
+  } catch (e) {
+    showToast(e.message || '导出失败')
   }
 }
 

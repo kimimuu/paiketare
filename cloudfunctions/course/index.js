@@ -1,4 +1,5 @@
-// course 云函数：排课发起、老师确认/拒绝、课表查询、管理端待办、运营调整
+// course 云函数：排课发起、老师确认/拒绝、课表查询、管理端待办、运营调整、Excel 导出
+const ExcelJS = require('exceljs')
 const { F, queryAll, insertOne, updateById, rdb } = require('./common/pgdb')
 const { requireAuth } = require('./common/auth')
 const { wrap } = require('./common/resp')
@@ -7,6 +8,19 @@ const { filterCandidates, buildOccurrences, BLOCKING_STATUS, sessionConflictsWit
 
 function bad(msg) {
   throw Object.assign(new Error(msg), { code: 400 })
+}
+
+// ========== 二期 A：审批流 主动发送站内消息辅助 ==========
+async function sendMessage({ toId, fromId = '', type = '', content, linkType = '', linkId = '' }) {
+  try {
+    await insertOne('messages', {
+      fromId, toId, type, content,
+      linkType, linkId,
+      read: false
+    })
+  } catch (e) {
+    console.warn('sendMessage failed:', e.message) // 消息失败不影响主流程
+  }
 }
 
 // 创建前校验：老师必须在候选筛选中通过
@@ -45,7 +59,7 @@ async function createCourseSessions(courseId, req, teacherId, studentId) {
 
 // 发起体验课
 async function createTrial(event) {
-  requireAuth(event, 'admin')
+  const payload = requireAuth(event, 'admin')
   const { studentId, teacherId, campusId, date, startTime } = event
   if (!studentId || !teacherId || !campusId) bad('参数不完整')
   if (!isValidDateStr(date)) bad('请选择上课日期')
@@ -61,12 +75,23 @@ async function createTrial(event) {
     status: 'pending'
   })
   await createCourseSessions(res.id, req, teacherId, studentId)
+
+  // D: 通知老师有新课待确认
+  const stu = await queryAll('students', { id: studentId }, { limit: 1 })
+  if (stu.length) {
+    await sendMessage({
+      toId: teacherId, type: 'course_new_pending',
+      content: `【新课待确认】${date} ${startTime} 体验课（${stu[0].name}），请尽快处理`,
+      linkType: 'course', linkId: res.id, fromId: payload.uid
+    })
+  }
+
   return { courseId: res.id }
 }
 
 // 发起正式课
 async function createRegular(event) {
-  requireAuth(event, 'admin')
+  const payload = requireAuth(event, 'admin')
   const { studentId, teacherId, campusId, startTime } = event
   const weekday = Number(event.weekday)
   const duration = Number(event.duration)
@@ -87,6 +112,17 @@ async function createRegular(event) {
     status: 'pending'
   })
   const count = await createCourseSessions(res.id, req, teacherId, studentId)
+
+  // D: 通知老师有新课待确认
+  const stu = await queryAll('students', { id: studentId }, { limit: 1 })
+  if (stu.length) {
+    await sendMessage({
+      toId: teacherId, type: 'course_new_pending',
+      content: `【新课待确认】每周${['日','一','二','三','四','五','六'][weekday]} ${startTime} 正式课（${stu[0].name} × ${totalSessions} 次），请尽快处理`,
+      linkType: 'course', linkId: res.id, fromId: payload.uid
+    })
+  }
+
   return { courseId: res.id, sessionCount: count }
 }
 
@@ -269,10 +305,9 @@ async function dashboardStats(event) {
 
 /**
  * 调单次课时间/日期/校区（admin）
- * 入参: { sessionId, newDate, newStartTime, newEndTime?, newCampusId? }
  */
 async function rescheduleSession(event) {
-  requireAuth(event, 'admin')
+  const payload = requireAuth(event, 'admin')
   const { sessionId, newDate, newStartTime, newEndTime, newCampusId } = event
   if (!sessionId || !newDate || !newStartTime) bad('参数错误')
   if (!isValidDateStr(newDate)) bad('日期格式不正确')
@@ -283,7 +318,6 @@ async function rescheduleSession(event) {
     if (!cam.length) bad('校区不存在')
   }
 
-  // 1. session 存在
   const sRows = await queryAll('sessions', { id: sessionId }, { limit: 1 })
   if (!sRows.length) bad('session 不存在')
   const session = sRows[0]
@@ -291,19 +325,16 @@ async function rescheduleSession(event) {
     throw Object.assign(new Error('已完成或已取消的课不能调整'), { code: 400 })
   }
 
-  // 2. 原 course
   const cRows = await queryAll('courses', { id: session.courseId }, { limit: 1 })
   if (!cRows.length) bad('课程不存在')
   const course = cRows[0]
 
-  // 3. 推导 endTime
   const dur = Number(course.duration)
   let endMin = newEndTime ? toMinutes(newEndTime) : toMinutes(newStartTime) + dur
   if (endMin > 1440) bad('结束时间不能跨天')
   const finalEndTime = toTimeStr(endMin)
   const targetCampus = newCampusId || session.campusId
 
-  // 4. 老师校区包含新校区
   const teacherId = session.teacherId
   const tRows = await queryAll('teachers', { userId: teacherId }, { limit: 1 })
   if (!tRows.length) bad('老师不存在')
@@ -312,14 +343,12 @@ async function rescheduleSession(event) {
     throw Object.assign(new Error('该老师不支持新校区'), { code: 400 })
   }
 
-  // 5. 新时段在老师可用时段内
   const slots = await queryAll('availabilities', { teacherId })
   const occ = { date: newDate, weekday: weekdayOf(newDate), startMin: toMinutes(newStartTime), endMin }
   if (!isCovered(slots, occ)) {
     throw Object.assign(new Error('新时段不在老师可用时段内'), { code: 400 })
   }
 
-  // 6. 冲突检查：除当前 session 外的 BLOCKING sessions
   const busy = await queryAll('sessions', {
     teacherId,
     status: F.in(BLOCKING_STATUS),
@@ -329,54 +358,53 @@ async function rescheduleSession(event) {
     b.date === newDate && overlaps(toMinutes(b.startTime), toMinutes(b.endTime), occ.startMin, occ.endMin)
   )
   if (clash) {
-    // 查冲突详情
     const clashCourse = await queryAll('courses', { id: clash.courseId }, { limit: 1 })
     const stu = clashCourse.length ? await queryAll('students', { id: clashCourse[0].studentId }, { limit: 1 }) : []
     const conflicts = [{
-      sessionId: clash.id,
-      courseId: clash.courseId,
-      date: clash.date,
-      startTime: clash.startTime,
-      endTime: clash.endTime,
+      sessionId: clash.id, courseId: clash.courseId,
+      date: clash.date, startTime: clash.startTime, endTime: clash.endTime,
       studentName: stu.length ? stu[0].name : '未知'
     }]
     throw Object.assign(new Error(`调课失败：${clash.date} ${clash.startTime}-${clash.endTime} 与已有课程（${conflicts[0].studentName}）冲突`), { code: 400, conflicts })
   }
 
-  // 7. 更新
   await updateById('sessions', sessionId, {
     date: newDate, startTime: newStartTime, endTime: finalEndTime, campusId: targetCampus
   })
+
+  // D: 通知老师
+  const stu = await queryAll('students', { id: course.studentId }, { limit: 1 })
+  await sendMessage({
+    toId: teacherId, fromId: payload.uid, type: 'session_rescheduled',
+    content: `【调课通知】${stu.length ? stu[0].name : ''}的课程已调整为 ${newDate} ${newStartTime}-${finalEndTime}${targetCampus !== session.campusId ? '（校区已变）' : ''}`,
+    linkType: 'course', linkId: session.courseId
+  })
+
   return { done: true }
 }
 
 /**
  * 换老师：course 主表 + 未上课的 future sessions
- * 入参: { courseId, newTeacherId }
  */
 async function changeTeacher(event) {
-  requireAuth(event, 'admin')
+  const payload = requireAuth(event, 'admin')
   const { courseId, newTeacherId } = event
   if (!courseId || !newTeacherId) bad('参数错误')
 
-  // 1. course 存在
   const cRows = await queryAll('courses', { id: courseId }, { limit: 1 })
   if (!cRows.length) bad('课程不存在')
   const course = cRows[0]
   if (course.status === 'cancelled') bad('课程已取消')
   if (newTeacherId === course.teacherId) bad('新老师与现任相同')
 
-  // 2. 新老师存在
   const newT = await queryAll('teachers', { userId: newTeacherId }, { limit: 1 })
   if (!newT.length) bad('新老师不存在')
 
-  // 3. future BLOCKING sessions（date >= today）
   const today = todayStr()
   const allSessions = await queryAll('sessions', { courseId, status: F.in(BLOCKING_STATUS) })
   const future = allSessions.filter(s => s.date >= today)
   if (!future.length) bad('没有待执行的课程')
 
-  // 4. 新老师 availabilities + campuses + busy sessions (排除当前 course)
   const newCampuses = newT[0].campuses || []
   const newSlots = await queryAll('availabilities', { teacherId: newTeacherId })
   const newBusy = await queryAll('sessions', {
@@ -385,7 +413,6 @@ async function changeTeacher(event) {
     courseId: F.neq(courseId)
   })
 
-  // 5. 逐 future session 校验
   for (const s of future) {
     if (!newCampuses.includes(s.campusId)) {
       throw Object.assign(new Error(`换老师失败：${s.date} ${s.startTime}-${s.endTime} 新老师不支持该校区`), { code: 400 })
@@ -402,21 +429,35 @@ async function changeTeacher(event) {
     }
   }
 
-  // 6. 批量更新
   await updateById('courses', courseId, { teacherId: newTeacherId })
   const now = new Date().toISOString()
   await rdb.from('sessions').update({ teacherId: newTeacherId, updatedAt: now })
     .in('id', future.map(s => s.id))
+
+  // D: 通知旧老师 + 新老师
+  const stu = await queryAll('students', { id: course.studentId }, { limit: 1 })
+  const stuName = stu.length ? stu[0].name : ''
+  if (course.teacherId) {
+    await sendMessage({
+      toId: course.teacherId, fromId: payload.uid, type: 'teacher_changed',
+      content: `【课程移交】${stuName}的课程已移交其他老师`,
+      linkType: 'course', linkId: courseId
+    })
+  }
+  await sendMessage({
+    toId: newTeacherId, fromId: payload.uid, type: 'new_teacher_assigned',
+    content: `【新分配课程】${stuName}的 ${future.length} 节课已分配给您，请及时排进日程`,
+    linkType: 'course', linkId: courseId
+  })
 
   return { done: true, updatedSessions: future.length }
 }
 
 /**
  * 停课：取消所有 BLOCKING sessions + course 状态改 cancelled + endReason
- * 入参: { courseId, reason? }
  */
 async function endCourse(event) {
-  requireAuth(event, 'admin')
+  const payload = requireAuth(event, 'admin')
   const { courseId, reason } = event
   if (!courseId) bad('参数错误')
 
@@ -425,7 +466,6 @@ async function endCourse(event) {
   const course = cRows[0]
   if (course.status === 'cancelled') bad('课程已取消')
 
-  // 先查数量
   const busy = await queryAll('sessions', { courseId, status: F.in(BLOCKING_STATUS) })
   const cancelledCount = busy.length
 
@@ -439,12 +479,21 @@ async function endCourse(event) {
   const endReason = reason || 'cancelled_by_admin'
   await updateById('courses', courseId, { status: 'cancelled', endReason })
 
+  // D: 通知老师
+  if (course.teacherId && cancelledCount > 0) {
+    const stu = await queryAll('students', { id: course.studentId }, { limit: 1 })
+    await sendMessage({
+      toId: course.teacherId, fromId: payload.uid, type: 'course_cancelled',
+      content: `【停课通知】${stu.length ? stu[0].name : ''}的课程（${cancelledCount} 节）已提前结束`,
+      linkType: 'course', linkId: courseId
+    })
+  }
+
   return { cancelledSessions: cancelledCount }
 }
 
 /**
- * 换老师候选查询（轻量）：给定单节课条件，返回可用老师列表
- * 入参: { campusId, date, startTime, duration, excludeTeacherId? }
+ * 换老师候选查询（轻量）
  */
 async function findCandidatesForReschedule(event) {
   requireAuth(event, 'admin')
@@ -458,7 +507,6 @@ async function findCandidatesForReschedule(event) {
   if (endMin > 1440) bad('时段不能跨天')
   const occ = { date, weekday: weekdayOf(date), startMin: toMinutes(startTime), endMin }
 
-  // 所有 active 老师
   const [activeTeachers, teaAll] = await Promise.all([
     queryAll('users', { role: 'teacher', status: 'active' }),
     queryAll('teachers', {})
@@ -486,10 +534,167 @@ async function findCandidatesForReschedule(event) {
   return { list: results }
 }
 
+// ========== 二期 C：Excel 导出 ==========
+
+function bufferToDataUrl(buffer, mime) {
+  return `data:${mime};base64,${buffer.toString('base64')}`
+}
+
+/**
+ * 课表 Excel 导出
+ */
+async function exportSchedule(event) {
+  requireAuth(event, 'admin')
+  const { startDate, endDate, campusId, teacherId } = event
+  if (!isValidDateStr(startDate) || !isValidDateStr(endDate)) bad('日期范围不正确')
+
+  const where = { date: F.and(F.gte(startDate), F.lte(endDate)) }
+  if (campusId) where.campusId = campusId
+  if (teacherId) where.teacherId = teacherId
+  const list = await queryAll('sessions', where)
+  const sessions = list.filter(s => s.status !== 'cancelled')
+
+  const courseIds = [...new Set(sessions.map(s => s.courseId))]
+  const courseList = courseIds.length ? await queryAll('courses', { id: F.in(courseIds) }) : []
+  const courseById = Object.fromEntries(courseList.map(c => [c.id, c]))
+  const maps = await nameMaps({
+    studentIds: [...new Set(courseList.map(c => c.studentId))],
+    teacherIds: [...new Set(sessions.map(s => s.teacherId))],
+    campusIds: [...new Set(sessions.map(s => s.campusId))]
+  })
+
+  const wb = new ExcelJS.Workbook()
+  wb.creator = '排课系统'
+  wb.created = new Date()
+  const ws = wb.addWorksheet('课表', { properties: { defaultRowHeight: 20 } })
+
+  ws.columns = [
+    { header: '日期', key: 'date', width: 14 },
+    { header: '星期', key: 'weekday', width: 8 },
+    { header: '开始', key: 'start', width: 10 },
+    { header: '结束', key: 'end', width: 10 },
+    { header: '类型', key: 'type', width: 10 },
+    { header: '学生', key: 'student', width: 16 },
+    { header: '老师', key: 'teacher', width: 14 },
+    { header: '校区', key: 'campus', width: 16 },
+    { header: '状态', key: 'status', width: 10 }
+  ]
+
+  const WD = ['日','一','二','三','四','五','六']
+  const STATUS_MAP = { pending: '待确认', confirmed: '已确认', completed: '已完成', cancelled: '已取消', rejected: '已拒绝' }
+
+  // 按日期+时间排序
+  sessions.sort((a, b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : (a.startTime < b.startTime ? -1 : 1)))
+
+  for (const s of sessions) {
+    const course = courseById[s.courseId] || {}
+    ws.addRow({
+      date: s.date,
+      weekday: WD[weekdayOf(s.date)] || '',
+      start: s.startTime,
+      end: s.endTime,
+      type: course.type === 'trial' ? '体验课' : '正式课',
+      student: maps.student[course.studentId] || '',
+      teacher: maps.teacher[s.teacherId] || '',
+      campus: maps.campus[s.campusId] || '',
+      status: STATUS_MAP[s.status] || s.status
+    })
+  }
+
+  // 表头样式
+  ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }
+  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF3478F6' } }
+  ws.getRow(1).alignment = { horizontal: 'center', vertical: 'middle' }
+
+  const buf = await wb.xlsx.writeBuffer()
+  const fileName = `课表_${startDate}_${endDate}.xlsx`
+  return { dataUrl: bufferToDataUrl(buf, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'), fileName }
+}
+
+/**
+ * 老师可用时段 Excel 导出
+ */
+async function exportAvailabilities(event) {
+  requireAuth(event, 'admin')
+  const { teacherId } = event
+
+  const [allTeachers, allUsers, allSlots] = await Promise.all([
+    queryAll('teachers', teacherId ? { userId: teacherId } : {}),
+    queryAll('users', { role: 'teacher', status: 'active' }),
+    queryAll('availabilities', teacherId ? { teacherId } : {})
+  ])
+
+  const nameById = Object.fromEntries(allUsers.map(u => [u.id, u.name]))
+  const slotsBy = {}
+  for (const s of allSlots) (slotsBy[s.teacherId] = slotsBy[s.teacherId] || []).push(s)
+
+  const wb = new ExcelJS.Workbook()
+  wb.creator = '排课系统'
+
+  // Sheet 1: 可用时段
+  const ws1 = wb.addWorksheet('老师可用时段', { properties: { defaultRowHeight: 20 } })
+  ws1.columns = [
+    { header: '老师', key: 'teacher', width: 14 },
+    { header: '类型', key: 'type', width: 10 },
+    { header: '星期', key: 'weekday', width: 8 },
+    { header: '日期', key: 'date', width: 14 },
+    { header: '开始', key: 'start', width: 10 },
+    { header: '结束', key: 'end', width: 10 }
+  ]
+  const WD = ['日','一','二','三','四','五','六']
+  const TYPE_MAP = { weekly: '每周', date: '单次' }
+
+  for (const t of allTeachers) {
+    const slots = slotsBy[t.userId] || []
+    const name = nameById[t.userId] || ''
+    if (!slots.length) {
+      ws1.addRow({ teacher: name, type: '-', weekday: '-', date: '-', start: '-', end: '-' })
+      continue
+    }
+    for (const s of slots) {
+      ws1.addRow({
+        teacher: name,
+        type: TYPE_MAP[s.type] || s.type,
+        weekday: s.type === 'weekly' ? (WD[s.weekday] || '') : '',
+        date: s.type === 'date' ? s.date : '',
+        start: s.startTime,
+        end: s.endTime
+      })
+    }
+  }
+
+  // Sheet 2: 可带校区
+  const ws2 = wb.addWorksheet('老师可带校区', { properties: { defaultRowHeight: 20 } })
+  ws2.columns = [
+    { header: '老师', key: 'teacher', width: 14 },
+    { header: '可带校区', key: 'campuses', width: 40 }
+  ]
+  const allCampuses = await queryAll('campuses', {})
+  const campusNameById = Object.fromEntries(allCampuses.map(c => [c.id, c.name]))
+
+  for (const t of allTeachers) {
+    const name = nameById[t.userId] || ''
+    const campusNames = (t.campuses || []).map(id => campusNameById[id] || id).join('、')
+    ws2.addRow({ teacher: name, campuses: campusNames || '（未设置）' })
+  }
+
+  // 表头样式
+  for (const ws of [ws1, ws2]) {
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2E7D32' } }
+    ws.getRow(1).alignment = { horizontal: 'center', vertical: 'middle' }
+  }
+
+  const buf = await wb.xlsx.writeBuffer()
+  const fileName = `老师可用时段_${todayStr()}.xlsx`
+  return { dataUrl: bufferToDataUrl(buf, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'), fileName }
+}
+
 const handlers = {
   createTrial, createRegular, confirm, reject,
   schedule, todoList, adminTodo, dashboardStats,
-  rescheduleSession, changeTeacher, endCourse, findCandidatesForReschedule
+  rescheduleSession, changeTeacher, endCourse, findCandidatesForReschedule,
+  exportSchedule, exportAvailabilities
 }
 
 exports.main = wrap(async (event) => {

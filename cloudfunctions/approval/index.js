@@ -9,6 +9,13 @@ function bad(msg) {
   throw Object.assign(new Error(msg), { code: 400 })
 }
 
+// 站内消息（内嵌，消息失败不影响主流程）
+async function sendMessage({ toId, fromId = '', type = '', content, linkType = '', linkId = '' }) {
+  try {
+    await insertOne('messages', { fromId, toId, type, content, linkType, linkId, read: false })
+  } catch (e) { console.warn('sendMessage failed:', e.message) }
+}
+
 // 审批列表（管理员）
 async function list(event) {
   requireAuth(event, 'admin')
@@ -142,6 +149,15 @@ async function approve(event) {
   }
   // 4. 更新审批状态
   await updateById('approvals', approvalId, { status: 'approved', approverId: admin.uid })
+
+  // D: 通知老师审批通过
+  const user = await queryAll('users', { id: teacherId }, { limit: 1 })
+  await sendMessage({
+    toId: teacherId, fromId: admin.uid, type: 'approval_approved',
+    content: `【审批通过】${user.length ? user[0].name : ''}的时间/校区修改申请已通过，新时段即刻生效`,
+    linkType: 'approval', linkId: approvalId
+  })
+
   return { done: true }
 }
 
@@ -158,6 +174,16 @@ async function reject(event) {
     approverId: admin.uid,
     rejectReason: rejectReason || ''
   })
+
+  // D: 通知老师审批驳回
+  const teacherId = rows[0].targetId
+  const user = await queryAll('users', { id: teacherId }, { limit: 1 })
+  await sendMessage({
+    toId: teacherId, fromId: admin.uid, type: 'approval_rejected',
+    content: `【审批驳回】${user.length ? user[0].name : ''}的时间/校区修改申请已驳回${rejectReason ? `，原因：${rejectReason}` : ''}`,
+    linkType: 'approval', linkId: approvalId
+  })
+
   return { done: true }
 }
 
