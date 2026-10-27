@@ -2,3 +2,20 @@
 node_modules/
 dist/
 functions
+
+# 临时诊断/部署脚本（只 commit 正式脚本）
+scripts/diag*.js
+scripts/ckauth*.js
+scripts/check-proc.js
+scripts/run-login.js
+scripts/keep-login.js
+scripts/configure-cos-direct.js
+scripts/cos-*.js
+scripts/fix-hosting-*.js
+scripts/test-force-download.js
+scripts/git-commit.js
+scripts/deploy-functions.js
+scripts/e2e-cd.js
+scripts/e2e-cd-precise.js
+scripts/e2e-final.js
+scripts/migrate-messages.js
