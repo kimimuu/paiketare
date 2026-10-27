@@ -24,6 +24,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { call } from '../api'
 
 const router = useRouter()
 const user = JSON.parse(localStorage.getItem('user') || 'null')
@@ -32,31 +33,19 @@ const isAdmin = user?.role === 'admin'
 const list = ref([])
 const unreadCount = ref(0)
 
-async function call(name, action, data = {}) {
-  const res = await fetch(`https://profitable-newt-d2fl5wq6f366cf13.api.tcloudbasegateway.com/v1/functions/${name}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...data, token: user?.token, action })
-  })
-  return res.json()
-}
-
 async function load() {
-  const r = await call('messages', 'list', { limit: 100 })
-  if (r.code === 0) {
-    list.value = r.data.list || []
-  }
-  const c = await call('messages', 'unreadCount')
-  if (c.code === 0) unreadCount.value = c.data.count || 0
+  list.value = (await call('messages', { action: 'list', limit: 100 }))?.list || []
+  const c = await call('messages', { action: 'unreadCount' })
+  unreadCount.value = c?.count || 0
 }
 
 async function markAll() {
-  await call('messages', 'markAllRead')
+  await call('messages', { action: 'markAllRead' })
   await load()
 }
 
 async function onClickItem(m) {
-  if (!m.read) await call('messages', 'markRead', { messageId: m.messageId })
+  if (!m.read) await call('messages', { action: 'markRead', id: m.messageId })
   if (m.linkType && m.linkId) {
     const routes = {
       approval: isAdmin ? '/admin/teachers?tab=approval' : '/teacher/availability',

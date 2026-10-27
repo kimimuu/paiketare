@@ -1,0 +1,5 @@
+# API 代理：把 /api/* 转发到 CloudBase Gateway，绕过 CORS
+/api/*   https://profitable-newt-d2fl5wq6f366cf13.api.tcloudbasegateway.com/:splat   200!
+
+# SPA history fallback（必须放在代理规则之后，否则会把 API 请求也吃掉）
+/*   /index.html   200

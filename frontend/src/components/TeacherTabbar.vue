@@ -10,21 +10,16 @@
 
 <script setup>
 import { ref, onMounted, onActivated } from 'vue'
+import { call } from '../api'
 
 const unread = ref(0)
-const GW = 'https://profitable-newt-d2fl5wq6f366cf13.api.tcloudbasegateway.com'
 
 async function load() {
   const user = JSON.parse(localStorage.getItem('user') || 'null')
   if (!user?.token) return
   try {
-    const res = await fetch(`${GW}/v1/functions/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'unreadCount', token: user.token })
-    })
-    const r = await res.json()
-    if (r.code === 0) unread.value = r.data.count || 0
+    const r = await call('messages', { action: 'unreadCount' })
+    unread.value = r?.count || 0
   } catch (e) {}
 }
 

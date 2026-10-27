@@ -1,23 +1,31 @@
-import cloudbase from '@cloudbase/js-sdk'
+// Gateway REST API 封装
+// 前端走相对路径 /api/*，由 Netlify 代理转发到 CloudBase Gateway，彻底绕开 CORS
+// （之前 CloudBase SDK 在 Netlify 域名下被 Gateway 以 403 拒绝跨域请求）
 
-// CloudBase 环境ID
-export const ENV_ID = 'profitable-newt-d2fl5wq6f366cf13'
+const API_BASE = '/api'
 
-const app = cloudbase.init({ env: ENV_ID })
-export const auth = app.auth({ persistence: 'local' })
-export const db = app.database()
+// 缓存网关匿名 token，过期前自动刷新
+let gwToken = null
+let gwTokenPromise = null
 
-// 匿名登录（用于获得 SDK 调用凭证，业务身份由自定义 token 管理）
-let loginPromise = null
-async function ensureLogin() {
-  const state = await auth.getLoginState()
-  if (state) return
-  if (!loginPromise) {
-    loginPromise = auth.anonymousAuthProvider().signIn().finally(() => {
-      loginPromise = null
-    })
+async function ensureGwToken() {
+  if (gwToken) return gwToken
+  if (!gwTokenPromise) {
+    gwTokenPromise = (async () => {
+      const res = await fetch(`${API_BASE}/auth/v1/signin/anonymously`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Device-ID': 'web' },
+        body: '{}'
+      })
+      const body = await res.json()
+      if (!body.access_token) throw new Error('匿名登录失败: ' + JSON.stringify(body))
+      gwToken = body.access_token
+      // token 一般 1 小时有效，提前 5 分钟清掉让下次 call 自动刷新
+      setTimeout(() => { gwToken = null }, 55 * 60 * 1000)
+      return gwToken
+    })().finally(() => { gwTokenPromise = null })
   }
-  await loginPromise
+  return gwTokenPromise
 }
 
 /**
@@ -26,11 +34,22 @@ async function ensureLogin() {
  * @param {object} data 入参（含 action 字段区分函数内操作）
  */
 export async function call(name, data = {}) {
-  await ensureLogin()
   const token = localStorage.getItem('token') || ''
-  const res = await app.callFunction({ name, data: { ...data, token } })
-  const body = res.result
-  if (body && body.code !== 0) {
+  const gw = await ensureGwToken()
+  const res = await fetch(`${API_BASE}/v1/functions/${name}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Device-ID': 'web',
+      Authorization: `Bearer ${gw}`
+    },
+    body: JSON.stringify({ ...data, token })
+  })
+  const body = await res.json()
+  if (res.status !== 200 || body.code === undefined) {
+    throw new Error(`网关调用 ${name} 失败 HTTP ${res.status}`)
+  }
+  if (body.code !== 0) {
     if (body.code === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('user')
@@ -38,5 +57,5 @@ export async function call(name, data = {}) {
     }
     throw new Error(body.message || '请求失败')
   }
-  return body ? body.data : null
+  return body.data ?? null
 }
