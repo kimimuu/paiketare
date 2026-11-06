@@ -1,0 +1,7 @@
+[build]
+  command = "cd frontend && npm install && npm run build"
+  publish = "frontend/dist"
+
+[[edge_functions]]
+  path = "/api/*"
+  function = "api-proxy"
