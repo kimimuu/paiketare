@@ -62,7 +62,8 @@ async function addSlot(event) {
     weekday: type === 'weekly' ? Number(weekday) : null,
     date: type === 'date' ? date : null,
     startTime, endTime,
-    approvalStatus: 'approved'
+    approvalStatus: 'approved',
+    kind: 'normal'
   })
   return { slotId: res.id }
 }
@@ -78,6 +79,43 @@ async function removeSlot(event) {
   return { done: true }
 }
 
+// ========== 不接课时段（blocked）—— 老师自己定，不走审批 ==========
+
+// 新增不接课时段（老师自管）
+async function addBlockedSlot(event) {
+  const payload = requireAuth(event, 'teacher')
+  const { type, weekday, date, startTime, endTime } = event
+  validateSlot(event)
+  const existing = await queryAll('availabilities', { teacherId: payload.uid }, { limit: 1000 })
+  const blockedExisting = existing.filter(s => (s.kind || 'normal') === 'blocked')
+  const candidate = { type, weekday: Number(weekday), date, startTime, endTime, kind: 'blocked' }
+  if (slotOverlapsExisting(blockedExisting, candidate)) {
+    bad('与已存在的不接课时段重叠')
+  }
+  const res = await insertOne('availabilities', {
+    teacherId: payload.uid,
+    type,
+    weekday: type === 'weekly' ? Number(weekday) : null,
+    date: type === 'date' ? date : null,
+    startTime, endTime,
+    approvalStatus: 'approved',
+    kind: 'blocked'
+  })
+  return { slotId: res.id }
+}
+
+// 删除不接课时段（老师自管）
+async function removeBlockedSlot(event) {
+  const payload = requireAuth(event, 'teacher')
+  const { slotId } = event
+  if (!slotId) bad('参数错误')
+  const rows = await queryAll('availabilities', { id: slotId, teacherId: payload.uid }, { limit: 1 })
+  if (!rows.length) bad('不接课时段不存在')
+  if ((rows[0].kind || 'normal') !== 'blocked') bad('只能删除不接课时段')
+  await removeById('availabilities', slotId)
+  return { done: true }
+}
+
 // 我的录入概览
 async function listMy(event) {
   const payload = requireAuth(event, 'teacher')
@@ -89,7 +127,9 @@ async function listMy(event) {
     campuses: tRows.length ? (tRows[0].campuses || []) : [],
     slots: slots.map(s => ({
       slotId: s.id, type: s.type, weekday: s.weekday, date: s.date,
-      startTime: s.startTime, endTime: s.endTime
+      startTime: s.startTime, endTime: s.endTime,
+      kind: s.kind || 'normal',
+      approvalStatus: s.approvalStatus || 'approved'
     }))
   }
 }
@@ -117,7 +157,8 @@ async function submitChange(event) {
       weekday: s.type === 'weekly' ? Number(s.weekday) : null,
       date: s.type === 'date' ? s.date : null,
       startTime: s.startTime,
-      endTime: s.endTime
+      endTime: s.endTime,
+      kind: 'normal'
     })
   }
   for (let i = 0; i < normalized.length; i++) {
@@ -200,7 +241,8 @@ function formatApproval(a) {
 
 const handlers = {
   setCampuses, addSlot, removeSlot, listMy,
-  submitChange, getMyPendingChange, listMyApprovals, withdrawApproval
+  submitChange, getMyPendingChange, listMyApprovals, withdrawApproval,
+  addBlockedSlot, removeBlockedSlot
 }
 
 exports.main = wrap(async (event) => {
