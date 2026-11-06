@@ -1,17 +1,17 @@
 {
   "envId": "profitable-newt-d2fl5wq6f366cf13",
   "version": "2.0",
-  "$schema": "https://framework-1302835657.cos.ap-shanghai.myqcloud.com/cloudbase/schema/v1.json",
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
   "functionRootPath": "cloudfunctions",
   "functions": [
-    { "name": "hello", "runtime": "Nodejs18.15" },
-    { "name": "auth", "runtime": "Nodejs18.15" },
-    { "name": "baseData", "runtime": "Nodejs18.15" },
-    { "name": "availability", "runtime": "Nodejs18.15" },
-    { "name": "schedule", "runtime": "Nodejs18.15" },
-    { "name": "course", "runtime": "Nodejs18.15" },
-    { "name": "approval", "runtime": "Nodejs18.15" },
-    { "name": "messages", "runtime": "Nodejs18.15" }
+    { "name": "hello", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+    { "name": "auth", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+    { "name": "baseData", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+    { "name": "availability", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+    { "name": "schedule", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+    { "name": "course", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+    { "name": "approval", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+    { "name": "messages", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 }
   ],
   "framework": {
     "name": "paike",
@@ -27,14 +27,14 @@
         "use": "@cloudbase/framework-plugin-function",
         "inputs": {
           "functions": [
-            { "name": "hello", "runtime": "Nodejs18.15" },
-            { "name": "auth", "runtime": "Nodejs18.15" },
-            { "name": "baseData", "runtime": "Nodejs18.15" },
-            { "name": "availability", "runtime": "Nodejs18.15" },
-            { "name": "schedule", "runtime": "Nodejs18.15" },
-            { "name": "course", "runtime": "Nodejs18.15" },
-            { "name": "approval", "runtime": "Nodejs18.15" },
-            { "name": "messages", "runtime": "Nodejs18.15" }
+            { "name": "hello", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+            { "name": "auth", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+            { "name": "baseData", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+            { "name": "availability", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+            { "name": "schedule", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+            { "name": "course", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+            { "name": "approval", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 },
+            { "name": "messages", "runtime": "Nodejs18.15", "memorySize": 64, "timeout": 60 }
           ],
           "functionRootPath": "cloudfunctions"
         }
